@@ -31,8 +31,8 @@ int lastButtonState = 0;     // previous state of the button
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
-static int pinA = 3; // Our first hardware interrupt pin is digital pin 2
-static int pinB = 2; // Our second hardware interrupt pin is digital pin 3
+static int pinA = 2; // Our first hardware interrupt pin is digital pin 2
+static int pinB = 3; // Our second hardware interrupt pin is digital pin 3
 static int SW = 4;   //button
 volatile byte aFlag = 0; // let's us know when we're expecting a rising edge on pinA to signal that the encoder has arrived at a detent
 volatile byte bFlag = 0; // let's us know when we're expecting a rising edge on pinB to signal that the encoder has arrived at a detent (opposite direction to when aFlag is set)
@@ -41,8 +41,8 @@ volatile byte oldEncPos = 0; //stores the last encoder position value so we can 
 volatile byte reading = 0; //somewhere to store the direct values we read from our interrupt pins before checking to see if we have moved a whole detent
 
 float enc_tol = 0.1;
-float enc_max = encoderPos + enc_tol;
-float enc_min = encoderPos - enc_tol;
+float enc_max = 0;
+float enc_min = 0;
 
 unsigned long lastButtonPress = 0;
 int start = 0;
@@ -57,11 +57,12 @@ MCP4802 dac(10);
 int voltage = 100;
 
 void setup() {
+  //  Serial.begin(9600);
   //button init
   pinMode(pinA, INPUT_PULLUP); // set pinA as an input, pulled HIGH to the logic voltage (5V or 3.3V for most cases)
   pinMode(pinB, INPUT_PULLUP); // set pinB as an input, pulled HIGH to the logic voltage (5V or 3.3V for most cases)
-  attachInterrupt(0, PinA, RISING); // set an interrupt on PinA, looking for a rising edge signal and executing the "PinA" Interrupt Service Routine (below)
-  attachInterrupt(1, PinB, RISING); // set an interrupt on PinB, looking for a rising edge signal and executing the "PinB" Interrupt Service Routine (below)
+  attachInterrupt(0, PinA, CHANGE); // set an interrupt on PinA, looking for a rising edge signal and executing the "PinA" Interrupt Service Routine (below)
+  attachInterrupt(1, PinB, CHANGE); // set an interrupt on PinB, looking for a rising edge signal and executing the "PinB" Interrupt Service Routine (below)
   pinMode(SW, INPUT_PULLUP);
 
   // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
@@ -96,7 +97,7 @@ void PinA() {
   cli(); //stop interrupts happening before we read pin values
   reading = PIND & 0xC; // read all eight pin values then strip away all but pinA and pinB's values
   if (reading == B00001100 && aFlag) { //check that we have both pins at detent (HIGH) and that we are expecting detent on this pin's rising edge
-    encoderPos --; //decrement the encoder's position count
+    encoderPos ++; //decrement the encoder's position count
     bFlag = 0; //reset flags for the next turn
     aFlag = 0; //reset flags for the next turn
   }
@@ -108,7 +109,7 @@ void PinB() {
   cli(); //stop interrupts happening before we read pin values
   reading = PIND & 0xC; //read all eight pin values then strip away all but pinA and pinB's values
   if (reading == B00001100 && bFlag) { //check that we have both pins at detent (HIGH) and that we are expecting detent on this pin's rising edge
-    encoderPos ++; //increment the encoder's position count
+    encoderPos --; //increment the encoder's position count
     bFlag = 0; //reset flags for the next turn
     aFlag = 0; //reset flags for the next turn
   }
@@ -123,20 +124,22 @@ void loop() {
   display.setTextColor(WHITE);
   display.setCursor(0, 0);
   display.print("T: ");
-  display.print(T_approx); //T_avg
+  display.print(T_approx, 1); //T_avg
   display.println("C");
   display.println();
   display.print("Set: ");
   display.print(encoderPos);
   display.println("C");
 
+  enc_min = encoderPos - enc_tol;
+  enc_max = encoderPos + enc_tol;
   // Read the button state
   int btnState = digitalRead(SW);
   //If we detect LOW signal, button is pressed
   if (btnState == LOW) {
-    //if 50ms have passed since last LOW pulse, it means that the
+    //if 500 ms have passed since last LOW pulse, it means that the
     //button has been pressed, released and pressed again
-    if (millis() - lastButtonPress > 50) {
+    if (millis() - lastButtonPress > 500) {
       if (start != 1) {
         start = 1;
       } else {
@@ -161,43 +164,31 @@ void loop() {
   T_approx = T_sum / float(avg_size);
   //  T_avg = round(T_approx);
 
-  //  //out temp
-  //  float T_sum_out = 0.0;
-  //  for (int i = 0; i < avg_size; i++) {
-  //    Vo = analogRead(ThermistorPinOut);
-  //    R2 = R1 * (1023.0 / (float)Vo - 1.0);
-  //    logR2 = log(R2);
-  //    T = (1.0 / (c1 + c2 * logR2 + c3 * logR2 * logR2 * logR2));
-  //    Tc = T - 273.15;
-  //    T_sum_out += Tc;
-  //  }
-  //  // averaging values from loop
-  //  T_approx_out = T_sum_out / float(avg_size);
-  //  T_avg_out = round(T_approx_out);
+
+  //  Serial.print(enc_min);
+  //  Serial.print("   ");
+  //  Serial.print(enc_max);
+  //  Serial.print(" >  ");
+  //  Serial.println(T_approx);
 
   if (start == 1) {
-    display.println("  Start!  ");
+    display.println("  Started  ");
     if (enc_min > T_approx) { // hot T_approx 25gradusa hardcore
-      digitalWrite(9, HIGH); // polarity
+      digitalWrite(6, HIGH); // polarity
       // We set channel A to output 500mV
       dac.setVoltageA(1800);
-    } else {
-      dac.setVoltageA(0);
-      dac.updateDAC();
     }
 
     if (enc_max < T_approx) { // cold T_approx 25gradusa hardcore
-      digitalWrite(9, LOW); // polarity
+      digitalWrite(6, LOW); // polarity
       // We set channel A to output 500mV
       dac.setVoltageA(1800);
-    } else {
-      dac.setVoltageA(0);
-      dac.updateDAC();
     }
+
   } else {
     dac.setVoltageA(0);
     dac.updateDAC();
-    display.println("  Stop!  ");
+    display.println("  Stopped  ");
   }
 
   // We send the command to the MCP4822
@@ -212,6 +203,6 @@ void loop() {
     Serial.println(encoderPos);
     oldEncPos = encoderPos;
   }
-  
-  delay(10);
+
+  delay(100);
 }
