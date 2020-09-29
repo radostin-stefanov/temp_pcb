@@ -2,7 +2,8 @@
     This sketch demonstrates how we can output a value in both channels of MCP4822 or MCP4812 or MCP4802.
 */
 
-#include <MCP48xx.h>
+
+// A6 H-Bridge temp
 #include <SPI.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
@@ -22,6 +23,15 @@ int Vo;
 float R1 = 10000;
 float logR2, R2, T, Tc, Tf;
 float c1 = 1.009249522e-03, c2 = 2.378405444e-04, c3 = 2.019202697e-07;
+
+
+#define DAC_B_Disable 0x8000
+#define MAX_Voltage_mV 4096
+#define DAC_Voltage_Step_mV 16
+
+// set pin 10 as the slave select for the digital pot:
+const int slaveSelectPin = 10;
+const int LDACPin = 9;
 
 // Variables will change:
 int buttonPushLow = 0;   // counter for the number of button presses
@@ -48,16 +58,11 @@ unsigned long lastButtonPress = 0;
 int start = 0;
 int stop_temp = 0;
 
-// Define the MCP4822 instance, giving it the SS (Slave Select) pin
-// The constructor will also initialize the SPI library
-// We can also define a MCP4812 or MCP4802
-MCP4802 dac(10);
-
-// We define an int variable to store the voltage in mV so 100mV = 0.1V
-int voltage = 100;
 
 void setup() {
   //  Serial.begin(9600);
+  pinMode(slaveSelectPin, OUTPUT);
+  pinMode(LDACPin, OUTPUT);
   //button init
   pinMode(pinA, INPUT_PULLUP); // set pinA as an input, pulled HIGH to the logic voltage (5V or 3.3V for most cases)
   pinMode(pinB, INPUT_PULLUP); // set pinB as an input, pulled HIGH to the logic voltage (5V or 3.3V for most cases)
@@ -65,6 +70,7 @@ void setup() {
   attachInterrupt(1, PinB, CHANGE); // set an interrupt on PinB, looking for a rising edge signal and executing the "PinB" Interrupt Service Routine (below)
   pinMode(SW, INPUT_PULLUP);
 
+  SPI.begin();
   // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Address 0x3D for 128x64
     for (;;); // Don't proceed, loop forever
@@ -79,18 +85,7 @@ void setup() {
   display.clearDisplay();
   delay(1000); // Pause for 1 seconds
 
-  // We call the init() method to initialize the instance
-  dac.init();
-
-  // The channels are turned off at startup so we need to turn the channel we need on
-  dac.turnOnChannelA();
-
-  // We configure the channels in High gain
-  // It is also the default value so it is not really needed
-  dac.setGainA(MCP4802::High);
-
-  dac.setVoltageA(0);
-  dac.updateDAC();
+  DAC_Write (DAC_B_Disable);
 }
 
 void PinA() {
@@ -115,6 +110,54 @@ void PinB() {
   }
   else if (reading == B00001000) aFlag = 1; //signal that we're expecting pinA to signal the transition to detent from free rotation
   sei(); //restart interrupts
+}
+
+void DAC_Write(int data) {
+  // take the SS pin low to select the chip:
+  digitalWrite(slaveSelectPin, LOW);
+  delay(10);
+  //  send in the address and value via SPI:
+  //  SPI.transfer(highByte(data));
+  //  SPI.transfer(lowByte(data));
+  SPI.transfer16(data);
+  Serial.println(data, BIN);
+  delay(10);
+  // take the SS pin high to de-select the chip:
+  digitalWrite(slaveSelectPin, HIGH);
+
+  digitalWrite(LDACPin, LOW);
+  delay(10);
+  digitalWrite(LDACPin, HIGH);
+
+  return;
+}
+
+void WriteDAC_A (int Voltage) {
+  if (Voltage > MAX_Voltage_mV) {
+    Voltage = MAX_Voltage_mV;
+  }
+  Serial.print("Voltage Before modification: ");
+  Serial.println(Voltage, DEC);
+  Serial.println(Voltage, BIN);
+  Voltage = Voltage / DAC_Voltage_Step_mV;
+  Serial.print("Voltage After division: ");
+  Serial.println(Voltage, DEC);
+  Serial.println(Voltage, BIN);
+  Voltage = Voltage << 4;
+  Serial.print("Voltage After shift: ");
+  Serial.println(Voltage, DEC);
+  Serial.println(Voltage, BIN);
+  bitClear(Voltage, 15); //Select channel A - write "0" to bit 15
+  bitClear(Voltage, 14); //Bit not used, cleared just because - write "0" to bit 14
+  bitClear(Voltage, 13); //Choose High gain - write "0" to bit 13
+  bitSet(Voltage, 12); //Activate selected channel (A) - write "1" to bit 12
+
+  Serial.print("Voltage After modification: ");
+  Serial.println(Voltage, DEC);
+  Serial.println(Voltage, BIN);
+  DAC_Write(Voltage);
+
+  return;
 }
 
 void loop() {
@@ -175,25 +218,18 @@ void loop() {
     display.println("  Started  ");
     if (enc_min > T_approx) { // hot T_approx 25gradusa hardcore
       digitalWrite(6, HIGH); // polarity
-      // We set channel A to output 500mV
-      dac.setVoltageA(1800);
+      WriteDAC_A (4090);
     }
 
     if (enc_max < T_approx) { // cold T_approx 25gradusa hardcore
       digitalWrite(6, LOW); // polarity
-      // We set channel A to output 500mV
-      dac.setVoltageA(1800);
+      WriteDAC_A (1000);
     }
 
   } else {
-    dac.setVoltageA(0);
-    dac.updateDAC();
+      WriteDAC_A (0);
     display.println("  Stopped  ");
   }
-
-  // We send the command to the MCP4822
-  // This is needed every time we make any change
-  dac.updateDAC();
 
   // save the current state as the last state, for next time through the loop
   lastButtonState = buttonState;
