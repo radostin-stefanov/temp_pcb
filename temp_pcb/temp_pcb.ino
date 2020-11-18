@@ -2,6 +2,8 @@
 #include <Adafruit_SSD1306.h>
 #include <splash.h>
 
+#include <PID_v1.h>
+
 #include <SPI.h>
 #include <Adafruit_GFX.h>
 #include <Wire.h>
@@ -14,8 +16,8 @@
 #define MAX_SET_TEMP 50
 
 
-float T_Peltier;
-float T_PCB;
+double T_Peltier = MIN_SET_TEMP;
+double T_PCB = MIN_SET_TEMP;
 int T_avg;
 int avg_size = 10; // averaging size
 int ThermistorPin = A0;
@@ -37,22 +39,34 @@ unsigned long NextButtonPress = 0;
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
-const int Interrupt = 2;
-const int PinA = 8;
-const int PinB = 9;
-const int SW = 10;
 
-const int P_Cool = 3;
-const int P_EN_Cool = 4;
-const int P_PWM = 5;
-const int P_EN_Heat = 6;
-const int P_Heat = 7;
+// Arduino Pins Setup
+const int Interrupt = 2; // Interrupt pin, used for Rotary
+const int PinA = 8; // Rotary Pin A
+const int PinB = 9; // Rotary Pin B
+const int SW = 10;  // Rotary Switch
 
-const int NTC_Peltier = A0;
-const int NTC_PCB = A1;
-const int Peltier_Current = A2;
+const int P_Cool = 3; // Peltier driver INB
+const int P_EN_Cool = 4; // Peltier driver EN/DIAGB
+const int P_PWM = 5; // Peltier driver PWM
+const int P_EN_Heat = 6; // Peltier driver EN/DIAGB
+const int P_Heat = 7; // Peltier driver INA
 
-static long rotaryCount = MIN_SET_TEMP;
+const int NTC_Peltier = A0; //Analog input for the Peltier Temperature
+const int NTC_PCB = A1; //Analog input for the PCB Temperature
+const int Peltier_Current = A2; //Analog input for the Peltier Current
+
+static double rotaryCount = MIN_SET_TEMP;
+
+//Define Variables we'll be connecting to
+double Output, SetPoint;
+
+//Define the aggressive and conservative Tuning Parameters
+double aggKp = 40, aggKi = 10, aggKd = 20;
+double consKp = 20, consKi = 0.05, consKd = 0.25;
+
+//Specify the links and initial tuning parameters
+PID myPID(&T_Peltier, &Output, &rotaryCount, consKp, consKi, consKd, DIRECT);
 
 void Rotary_Check_ISR () {
   cli ();
@@ -73,7 +87,7 @@ void Rotary_Check_ISR () {
   sei ();
 }
 
-void Display_Routine (float Display_Temp) {
+void Display_Routine (double Display_Temp) {
   // routine for displaying text for temp/hum readout
   display.clearDisplay();
   display.setTextSize(2);
@@ -81,18 +95,23 @@ void Display_Routine (float Display_Temp) {
   display.setCursor(0, 0);
 
   if ((0 < Display_Temp) && (Display_Temp < 60)) {
-    display.print("T: ");
-    display.print(Display_Temp, 2); //T_avg
-    display.print("C");
+    display.print("Temp: ");
+    display.print(Display_Temp, 1); //T_avg
+//    display.print("C");
   }
   else {
     display.print("Insert NTC");
   }
 
-  display.println();
+  //  display.println();
+  
+//  display.print("T_PCB:");
+//  display.print(T_PCB, 1); //T_avg
+//  display.print("C");
+  
   display.print("Set: ");
-  display.print(rotaryCount);
-  display.println("C");
+  display.print(rotaryCount, 0);
+//  display.println("C");
   display.println();
 
   if (started == 1) {
@@ -135,27 +154,38 @@ float Read_NTC (int Analog_IN) {
   return T_sum;
 }
 
-void Peltier_Control () {
+void Peltier_Control (double Temp_Peltier) {
 
-  if (started) {
-    if (rotaryCount > 23) {
-      digitalWrite (P_EN_Heat, HIGH);
+  if (started && (T_PCB < 90)) { //Check if the temperature of the PCB is at 90 deg_c
+
+    if (Temp_Peltier <= rotaryCount) {
       digitalWrite (P_Heat, HIGH);
       digitalWrite (P_Cool, LOW);
-      digitalWrite (P_EN_Cool, LOW);
+      myPID.SetControllerDirection(DIRECT);
     }
     else {
-      digitalWrite (P_EN_Cool, HIGH);
-      digitalWrite (P_Cool, HIGH);
-      digitalWrite (P_EN_Heat, LOW);
       digitalWrite (P_Heat, LOW);
+      digitalWrite (P_Cool, HIGH);
+      myPID.SetControllerDirection(REVERSE);
     }
-    analogWrite (P_PWM, 255);
+
+    double gap = abs(rotaryCount - Temp_Peltier); //distance away from setpoint
+    if (gap < 10)
+    { //we're close to setpoint, use conservative tuning parameters
+      myPID.SetTunings(consKp, consKi, consKd);
+    }
+    else
+    {
+      //we're far from setpoint, use aggressive tuning parameters
+      myPID.SetTunings(aggKp, aggKi, aggKd);
+    }
+
+    myPID.Compute();
+
+    analogWrite (P_PWM, Output);
   }
   else {
     digitalWrite (P_Cool, LOW);
-    digitalWrite (P_EN_Cool, LOW);
-    digitalWrite (P_EN_Heat, LOW);
     digitalWrite (P_Heat, LOW);
     analogWrite (P_PWM, 0);
   }
@@ -178,28 +208,31 @@ void setup() {
   pinMode(Interrupt, INPUT_PULLUP);
   attachInterrupt (0, Rotary_Check_ISR, CHANGE);   // Interrupt 0 is pin 2, Interrupt 1 is pin 3
 
+  pinMode (P_EN_Cool, INPUT);
+  pinMode (P_EN_Heat, INPUT);
+
   pinMode (P_Cool, OUTPUT);
-  pinMode (P_EN_Cool, OUTPUT);
   pinMode (P_PWM, OUTPUT);
-  pinMode (P_EN_Heat, OUTPUT);
   pinMode (P_Heat, OUTPUT);
 
   digitalWrite (P_Cool, LOW);
-  digitalWrite (P_EN_Cool, LOW);
   digitalWrite (P_PWM, LOW);
-  digitalWrite (P_EN_Heat, LOW);
   digitalWrite (P_Heat, LOW);
   Display_Routine (T_Peltier);
+
+  //turn the PID on
+  myPID.SetMode(AUTOMATIC);
 
 }
 
 void loop() {
 
-  Read_Switch ();
   T_Peltier = Read_NTC (NTC_Peltier);
   T_PCB = Read_NTC (NTC_PCB);
 
-  Peltier_Control ();
+  Read_Switch ();
 
-  Display_Routine (T_PCB);
+  Peltier_Control (T_Peltier);
+
+  Display_Routine (T_Peltier);
 }
