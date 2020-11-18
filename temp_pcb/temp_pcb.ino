@@ -97,21 +97,26 @@ void Display_Routine (double Display_Temp) {
   if ((0 < Display_Temp) && (Display_Temp < 60)) {
     display.print("Temp: ");
     display.print(Display_Temp, 1); //T_avg
-//    display.print("C");
+    //    display.print("C");
   }
   else {
     display.print("Insert NTC");
   }
 
   //  display.println();
-  
-//  display.print("T_PCB:");
-//  display.print(T_PCB, 1); //T_avg
-//  display.print("C");
-  
-  display.print("Set: ");
-  display.print(rotaryCount, 0);
-//  display.println("C");
+
+  //  display.print("T_PCB:");
+  //  display.print(T_PCB, 1); //T_avg
+  //  display.print("C");
+  if (rotaryCount <= 9) {
+    display.print("Set:   ");
+  }
+  else {
+    display.print("Set:  ");
+
+  }
+  display.println(rotaryCount, 0);
+  //  display.println("C");
   display.println();
 
   if (started == 1) {
@@ -156,7 +161,7 @@ float Read_NTC (int Analog_IN) {
 
 void Peltier_Control (double Temp_Peltier) {
 
-  if (started && (T_PCB < 90)) { //Check if the temperature of the PCB is at 90 deg_c
+  if (started && (T_PCB < 100)) { //Check if the temperature of the PCB is at 90 deg_c
 
     if (Temp_Peltier <= rotaryCount) {
       digitalWrite (P_Heat, HIGH);
